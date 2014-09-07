@@ -29,20 +29,21 @@ client.on('ready',function(){
     });
 })
 
+
 var dirToJsonHash = function(err,files,root, tree, parent,pending,done){
     if(files){
         pending += files.length
-    } else {
-        if(!--pending) done(tree);
     }
-    
+    if(pending < 1) done(tree);
+
+
     _.each(files,function(file){
         fs.stat(root + "/"+ file, function(err, fileStat){
             if(err){
                 console.log(err)
                 done(tree)
             }
-            
+
             if(fileStat && fileStat.isDirectory()){
                 console.log(root+"/" + file + " is a directory");
                 if(!parent[file]) parent[file] = {};
@@ -51,15 +52,15 @@ var dirToJsonHash = function(err,files,root, tree, parent,pending,done){
                     --pending;
                     dirToJsonHash(err,innerFiles, root+"/"+file ,tree,parent[file],pending,done);
                 });
-                
+
             } else if(fileStat) {
                 console.log("adding " + file + " to array for "+ parent);
                 parent[file] = fileStat;
-                if(!--pending) done(tree);
+                if(--pending < 1) done(tree);
             } else {
-                if(!--pending) done(tree);
+                if(--pending < 1) done(tree);
             }
-        
+
         });
     });
 
@@ -67,7 +68,8 @@ var dirToJsonHash = function(err,files,root, tree, parent,pending,done){
 
 //Server
 var listerService = http.createServer(function(request, response){
-    response.writeHead(200, {"Content-Type": "application/json"});
+    response.statusCode = 200;
+    response.setHeader('Content-Type', 'application/json');
     dispatch(request,response);
 
 });
@@ -78,8 +80,10 @@ var dispatch = function(request, response){
     try{
         if(request.method == 'POST' || request.method == 'GET'){
             switch(url.parse(request.url).pathname){
-        
-            
+            case "/temp":
+                return temp(request,response);
+            case "/stream":
+                return stream(request,response);
             case "/play":
                 return play(request, response);
             case "/pause":
@@ -91,12 +95,12 @@ var dispatch = function(request, response){
                 return listAll(request, response);
             }
         }
-        return listAll(request,response); 
+        return listAll(request,response);
     } catch (e){
         console.log(e.message);
         response.end('error');
     }
-    
+
 }
 
 var listAll = function(request, response){
@@ -105,10 +109,45 @@ var listAll = function(request, response){
     tree[root] = {}
     var udid = url.parse(request.url, true).query['udid'];
     console.log("udid: " + udid);
-    fs.readdir(root, function(err,files){tree = dirToJsonHash(err,files,root,tree,tree[root],0,function(tree){
+    fs.stat(root, function(err,stat){
+      console.log(err + " \n\n " + stat);
+      if(err){
         response.end(JSON.stringify(tree));
-    })});
+      }
+      fs.readdir(root, function(err,files){tree = dirToJsonHash(err,files,root,tree,tree[root],0,function(tree){
+          response.end(JSON.stringify(tree));
+      })});
+    });
+
+
 }
+
+
+/*
+ * Streaming
+ */
+var stream = function(request, response){
+  var chapterPath = url.parse(request.url, true).query['chapterPath'];
+  var readStream = fs.createReadStream(chapterPath).on('error', function(e){
+    console.log(e);
+    response.end();
+  });
+  response.setHeader('Content-Type', 'application/ogg');
+  readStream.pipe(response);
+
+};
+
+var temp = function(request,response){
+  fs.readFile('/sys/class/thermal/thermal_zone0/temp', function(err,data){
+    if(!err){
+      var cs = parseInt(data,10);
+      var result = {
+        temp: (cs/1000) * 1.8 + 32
+      };
+      response.end(JSON.stringify(result));
+    }
+  });
+};
 
 /**
  * Radio controls
@@ -124,9 +163,9 @@ var play = function(request, response){
             console.log(mpdResponse);
             return startPlayback();
         });
-        
+
     };
-    
+
     var startPlayback = function(){
         client.sendCommand(mpd.cmd('play',[]),function(playResponse){
             console.log(playResponse);
@@ -135,22 +174,22 @@ var play = function(request, response){
         });
     };
     var mpdComplete = function (mpdResponse){
-       return response.end(JSON.stringify({status:'playing'})); 
+       return response.end(JSON.stringify({status:'playing'}));
     };
     if(paused && chapterPath == currentlyPlaying){
         return startPlayback();
     }
-    
+
     console.log('playing: ' + chapterPath);
-    
-    
+
+
     client.sendCommand(mpd.cmd('clear',[]),function(mpdResponse){
         currentlyPlaying = chapterPath;
-        return addChapter(); 
+        return addChapter();
     });
-    
-    
-    
+
+
+
 }
 
 var pause = function(request, response){
@@ -168,7 +207,7 @@ var stopPlaying = function(request, response){
     client.sendCommand(mpd.cmd('stop',[]),function(){
         return response.end(JSON.stringify({status:'stopped'}));
     });
-    
+
 }
 
 
